@@ -23,8 +23,8 @@ jobs:
           echo "After:"
           grep -o 'TBA_KEY.*' index.html | head -1
         env:
-          TBA_KEY: ${{ secrets.TBA_KEY }}
-
+          TBA_KEY: k3RQ7yVrZdKqUt6RjDlOKYadDOglo2B41X1CE6Fv5eUozinzBfDhr2aw3hg5D22z
+          
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
