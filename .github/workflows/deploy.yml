@@ -14,7 +14,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Inject TBA key
-        run: sed -i 's|__TBA_KEY_PLACEHOLDER__|${{ secrets.TBA_KEY }}|g' index.html
+        run: |
+          echo "Before:"
+          grep -o 'TBA_KEY.*' index.html | head -1
+          sed -i 's|__TBA_KEY_PLACEHOLDER__|${{ secrets.TBA_KEY }}|g' index.html
+          echo "After:"
+          grep -o 'TBA_KEY.*' index.html | head -1
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
