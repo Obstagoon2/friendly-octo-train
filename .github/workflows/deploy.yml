@@ -16,12 +16,12 @@ jobs:
 
       - name: Inject TBA key
         run: |
-          echo "Secret length: ${#TBA_KEY}"
+          echo "Secret length: ${#__TBA_KEY_PLACEHOLDER__}"
           echo "Before:"
-          grep -o 'TBA_KEY.*' index.html | head -1
-          sed -i "s|__TBA_KEY_PLACEHOLDER__|${TBA_KEY}|g" index.html
+          grep -o '__TBA_KEY_PLACEHOLDER__.*' index.html | head -1
+          sed -i "s|TBA_KEY|${__TBA_KEY_PLACEHOLDER__}|g" index.html
           echo "After:"
-          grep -o 'TBA_KEY.*' index.html | head -1
+          grep -o '__TBA_KEY_PLACEHOLDER__.*' index.html | head -1
         env:
           TBA_KEY: k3RQ7yVrZdKqUt6RjDlOKYadDOglo2B41X1CE6Fv5eUozinzBfDhr2aw3hg5D22z
           
