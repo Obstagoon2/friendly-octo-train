@@ -1,4 +1,3 @@
-
 name: Deploy to GitHub Pages
 
 on:
@@ -16,15 +15,10 @@ jobs:
 
       - name: Inject TBA key
         run: |
-          echo "Secret length: ${#TBA_KEY}"
-          echo "Before:"
-          grep -o 'TBA_KEY.*' index.html | head -1
           sed -i "s|__TBA_KEY_PLACEHOLDER__|${TBA_KEY}|g" index.html
-          echo "After:"
-          grep -o 'TBA_KEY.*' index.html | head -1
         env:
           TBA_KEY: ${{ secrets.TBA_KEY }}
-          
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
