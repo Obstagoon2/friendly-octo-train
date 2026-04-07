@@ -144,21 +144,8 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
         <input type="text" id="event-code" placeholder="Event code (e.g. 2026mslr)" style="width:185px">
         <button onclick="fetchStatbotics()" id="fetch-stat-btn">Fetch Statbotics</button>
         <button onclick="fetchTBA()" id="fetch-tba-btn">Fetch TBA</button>
-        <div class="dd-wrap">
-          <button onclick="toggleDD('import-dd')">&#8595; Import</button>
-          <div class="dd-menu" id="import-dd" style="display:none">
-            <button onclick="closeDD();document.getElementById('match-file').click()">Match CSV</button>
-            <button onclick="closeDD();document.getElementById('pit-file').click()">Pit CSV</button>
-            <button onclick="closeDD();document.getElementById('photo-file').click()">&#128247; Photos (.zip)</button>
-            <button onclick="closeDD();document.getElementById('project-file').click()">&#128196; Open Project</button>
-          </div>
-        </div>
-        <div class="dd-wrap">
-          <button onclick="toggleDD('export-dd')">&#8593; Export</button>
-          <div class="dd-menu" id="export-dd" style="display:none">
-            <button onclick="closeDD();openExportModal()">Export options...</button>
-          </div>
-        </div>
+        <button onclick="openImportModal()">&#8595; Import</button>
+        <button onclick="openExportModal()">&#8593; Export</button>
         <input type="file" id="match-file" accept=".csv" style="display:none" onchange="loadCSV(event,'match')">
         <input type="file" id="pit-file" accept=".csv" style="display:none" onchange="loadCSV(event,'pit')">
         <input type="file" id="photo-file" accept=".zip" style="display:none" onchange="loadPhotoZip(event)">
@@ -283,6 +270,19 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
     </div>
     <div class="col-scroll"><table class="col-table"><thead><tr><th>Field</th><th>Import</th><th>Count toward total</th></tr></thead><tbody id="tba-col-checkboxes"></tbody></table></div>
     <div class="modal-footer"><button onclick="cancelTBAModal()">Cancel</button><button class="act" onclick="confirmTBAModal()" style="margin-left:auto">Apply</button></div>
+  </div>
+</div>
+
+<!-- Import Modal -->
+<div id="import-modal" style="display:none" class="modal-backdrop">
+  <div class="modal">
+    <h2>Import</h2>
+    <p class="modal-sub">Choose what to import.</p>
+    <div class="export-row"><span>Match CSV</span><label class="act" style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;border:0.5px solid var(--info-border)">Choose file<input type="file" accept=".csv" style="display:none" onchange="closeImportModal();loadCSV(event,'match')"></label></div>
+    <div class="export-row"><span>Pit CSV</span><label class="act" style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;border:0.5px solid var(--info-border)">Choose file<input type="file" accept=".csv" style="display:none" onchange="closeImportModal();loadCSV(event,'pit')"></label></div>
+    <div class="export-row"><span>&#128247; Photos (.zip)</span><label class="act" style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;border:0.5px solid var(--info-border)">Choose file<input type="file" accept=".zip" style="display:none" onchange="closeImportModal();loadPhotoZip(event)"></label></div>
+    <div class="export-row"><span>&#128196; Open Project</span><label class="act" style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;border:0.5px solid var(--info-border)">Choose file<input type="file" accept=".zip" style="display:none" onchange="closeImportModal();importProject(event)"></label></div>
+    <div class="modal-footer"><button onclick="closeImportModal()" style="margin-left:auto">Cancel</button></div>
   </div>
 </div>
 
@@ -782,8 +782,8 @@ function renderRankings(){
   var view=rlViews.find(function(v){return v.id===activeRLView;})||rlViews[0];
   var arr=Object.values(teams);
   arr.forEach(function(t){t.__rl__=calcTotalForView(t,view);});
-  // Sidebar rankings: DNP pushed to bottom
-  arr.sort(function(a,b){if(a.dnp!==b.dnp)return a.dnp?1:-1;return b.__rl__-a.__rl__;});
+  // Sidebar rankings: also sorted inline, DNP grayed but not pushed to bottom
+  arr.sort(function(a,b){return b.__rl__-a.__rl__;});
   var el=document.getElementById('rank-list');
   if(!arr.length){el.innerHTML='<p style="font-size:12px;color:var(--text3)">No teams yet</p>';return;}
   var rank=0;
@@ -889,6 +889,8 @@ function addCriteria(){
 function removeCriteria(i){criteria.splice(i,1);renderCriteriaModal();renderAll();}
 
 // ── Export ──
+function openImportModal(){document.getElementById('import-modal').style.display='flex';}
+function closeImportModal(){document.getElementById('import-modal').style.display='none';}
 function openExportModal(){
   var opts='<div class="export-row"><span>&#128196; Full project (.zip)</span><button class="act" onclick="exportProject()">Download</button></div>';
   rlViews.forEach(function(v){opts+='<div class="export-row"><span>&#128202; Rankings: '+v.name+'</span><button onclick="exportRankingCSV(\''+v.id+'\')">CSV</button></div>';});
@@ -1003,10 +1005,8 @@ function applyMobile(isMobile){
       +'<input type="text" id="event-code-m" placeholder="Event code" style="flex:1;min-width:130px">'
       +'<button onclick="fetchStatMobile()">Fetch Statbotics</button>'
       +'<button onclick="fetchTBAMobile()">Fetch TBA</button>'
-      +'<label style="padding:5px 10px;border:0.5px solid var(--border2);border-radius:6px;cursor:pointer;font-size:12px">Match CSV<input type="file" accept=".csv" style="display:none" onchange="loadCSV(event,\'match\')"></label>'
-      +'<label style="padding:5px 10px;border:0.5px solid var(--border2);border-radius:6px;cursor:pointer;font-size:12px">Pit CSV<input type="file" accept=".csv" style="display:none" onchange="loadCSV(event,\'pit\')"></label>'
-      +'<label style="padding:5px 10px;border:0.5px solid var(--border2);border-radius:6px;cursor:pointer;font-size:12px">&#128247; Photos<input type="file" accept=".zip" style="display:none" onchange="loadPhotoZip(event)"></label>'
-      +'<label style="padding:5px 10px;border:0.5px solid var(--border2);border-radius:6px;cursor:pointer;font-size:12px">&#128196; Open Project<input type="file" accept=".zip" style="display:none" onchange="importProject(event)"></label>'
+      +'<button onclick="openImportModal()">&#8595; Import</button>'
+      +'<button onclick="openExportModal()">&#8593; Export</button>'
       +'<button onclick="openExportModal()">&#8593; Export</button>'
       +'<button onclick="openCriteriaModal()">Criteria</button><button onclick="addTeamManual()">+ Team</button>'
       +'<button onclick="toggleTheme()" id="theme-btn-m">Light mode</button>'
