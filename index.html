@@ -144,6 +144,7 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
         <input type="text" id="event-code" placeholder="Event code (e.g. 2026mslr)" style="width:185px">
         <button onclick="fetchStatbotics()" id="fetch-stat-btn">Fetch Statbotics</button>
         <button onclick="fetchTBA()" id="fetch-tba-btn">Fetch TBA</button>
+        <button onclick="refreshData()" id="refresh-btn" title="Refresh Statbotics + TBA data">&#8635; Refresh</button>
         <button onclick="openImportModal()">&#8595; Import</button>
         <button onclick="openExportModal()">&#8593; Export</button>
         <input type="file" id="match-file" accept=".csv" style="display:none" onchange="loadCSV(event,'match')">
@@ -156,8 +157,8 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
       </div>
       <div id="status-bar" class="status-bar"></div>
     </div>
-    <div class="card" style="padding:0;overflow:hidden">
-      <div class="table-outer" id="table-outer">
+    <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0">
+      <div class="table-outer" id="table-outer" style="overflow-x:auto;overflow-y:auto;max-height:calc(100vh - 140px)">
         <table><thead id="thead"></thead><tbody id="tbody"></tbody></table>
       </div>
     </div>
@@ -326,7 +327,127 @@ var teamPhotos={};
 var detailTeamNum=null,detailCarouselIndex=0,detailCarouselPhotos=[];
 var detailSortedNums=[];
 
-// ── Theme ──
+var autoRefreshInterval=null;
+var lastEventCode='';
+
+// ── LocalStorage persistence ──
+function saveState(){
+  try{
+    var state={
+      teams:{},criteria:criteria,noteTags:noteTags,
+      rlViews:rlViews,activeRLView:activeRLView,
+      sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
+      lastEventCode:lastEventCode
+    };
+    Object.values(teams).forEach(function(t){
+      state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
+        textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
+    });
+    localStorage.setItem('frc_picklist',JSON.stringify(state));
+  }catch(e){console.warn('Save failed:',e);}
+}
+
+function loadState(){
+  try{
+    var raw=localStorage.getItem('frc_picklist');
+    if(!raw)return false;
+    var state=JSON.parse(raw);
+    criteria=state.criteria||[];
+    noteTags=state.noteTags||['Strategy','Autos','Concerns'];
+    rlViews=state.rlViews||[{id:'rl_default',name:'Overall',criteriaIds:[]}];
+    activeRLView=state.activeRLView||'rl_default';
+    sortCol=state.sortCol||'__total__';
+    sortAsc=state.sortAsc||false;
+    lastEventCode=state.lastEventCode||'';
+    if(typeof state.darkMode==='boolean'&&state.darkMode!==darkMode)toggleTheme();
+    teams={};
+    Object.values(state.teams||{}).forEach(function(t){
+      teams[t.num]={num:t.num,name:t.name,notes:t.notes||{},scores:t.scores||{},
+        textScores:t.textScores||{},dnp:t.dnp||false,statbotics:t.statbotics||{},tba:t.tba||{}};
+    });
+    if(lastEventCode) document.getElementById('event-code').value=lastEventCode;
+    return true;
+  }catch(e){console.warn('Load failed:',e);return false;}
+}
+
+// Auto-save after every meaningful action
+function saveAndRender(){saveState();renderAll();}
+
+// ── Auto-refresh ──
+function startAutoRefresh(){
+  stopAutoRefresh();
+  autoRefreshInterval=setInterval(function(){
+    if(lastEventCode) refreshData();
+  },5*60*1000); // every 5 minutes
+}
+function stopAutoRefresh(){
+  if(autoRefreshInterval){clearInterval(autoRefreshInterval);autoRefreshInterval=null;}
+}
+function refreshData(){
+  var code=lastEventCode||document.getElementById('event-code').value.trim().toLowerCase();
+  if(!code)return;
+  setStatus('Auto-refreshing data...');
+  // Refresh Statbotics
+  fetch('https://api.statbotics.io/v3/team_events?event='+code+'&limit=100',{headers:{accept:'application/json'}})
+  .then(function(r){return r.ok?r.json():null;})
+  .then(function(list){
+    if(!list||!list.length)return;
+    return Promise.all(list.map(function(s){
+      return fetch('https://api.statbotics.io/v3/team_event/'+s.team+'/'+code,{headers:{accept:'application/json'}})
+        .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+    }));
+  })
+  .then(function(details){
+    if(!details)return;
+    details.forEach(function(s){
+      if(!s)return;
+      var num=s.team;
+      if(!teams[num])return; // only update existing teams, don't add new ones on refresh
+      var b=(s.epa&&s.epa.breakdown)||{};
+      teams[num].statbotics={
+        epa:s.epa&&s.epa.total_points&&s.epa.total_points.mean!=null?+s.epa.total_points.mean.toFixed(1):'',
+        auto_epa:b.auto_points!=null?+b.auto_points.toFixed(1):'',
+        teleop_epa:b.teleop_points!=null?+b.teleop_points.toFixed(1):'',
+        endgame_epa:b.endgame_points!=null?+b.endgame_points.toFixed(1):'',
+        rank:s.record&&s.record.qual?s.record.qual.rank:'',
+        wins:s.record&&s.record.qual?s.record.qual.wins:'',
+        losses:s.record&&s.record.qual?s.record.qual.losses:'',
+        rps:s.record&&s.record.qual?s.record.qual.rps:'',
+        winrate:s.record&&s.record.qual&&s.record.qual.winrate!=null?+(s.record.qual.winrate*100).toFixed(1):''
+      };
+    });
+  }).catch(function(){});
+  // Refresh TBA
+  var h={'X-TBA-Auth-Key':TBA_KEY};
+  var base='https://www.thebluealliance.com/api/v3';
+  Promise.all([
+    fetch(base+'/event/'+code+'/rankings',{headers:h}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}),
+    fetch(base+'/event/'+code+'/oprs',{headers:h}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};})
+  ]).then(function(res){
+    var tbaRank=res[0],tbaOpr=res[1];
+    var rankMap={};
+    (tbaRank.rankings||[]).forEach(function(r){
+      rankMap[r.team_key]={rank:r.rank,wins:r.record?r.record.wins:'',losses:r.record?r.record.losses:'',ties:r.record?r.record.ties:'',rp:r.extra_stats?r.extra_stats[0]:''};
+    });
+    var oprMap=tbaOpr.oprs||{},dprMap=tbaOpr.dprs||{},ccwmMap=tbaOpr.ccwms||{};
+    Object.values(teams).forEach(function(t){
+      var key='frc'+t.num;
+      if(!t.tba) t.tba={};
+      var r=rankMap[key]||{};
+      if(r.rank!=null) t.tba.tba_rank=r.rank;
+      if(oprMap[key]!=null) t.tba.tba_opr=+oprMap[key].toFixed(1);
+      if(dprMap[key]!=null) t.tba.tba_dpr=+dprMap[key].toFixed(1);
+      if(ccwmMap[key]!=null) t.tba.tba_ccwm=+ccwmMap[key].toFixed(1);
+      if(r.wins!=null) t.tba.tba_wins=r.wins;
+      if(r.losses!=null) t.tba.tba_losses=r.losses;
+      if(r.ties!=null) t.tba.tba_ties=r.ties;
+      if(r.rp!=null) t.tba.tba_rp=r.rp;
+    });
+    saveState();
+    renderAll();
+    setStatus('Data refreshed','success');
+  }).catch(function(){setStatus('Refresh failed','error');});
+}
 function toggleTheme(){
   darkMode=!darkMode;
   document.body.setAttribute('data-theme',darkMode?'':'light');
@@ -517,6 +638,7 @@ function fetchStatbotics(){
   if(!code){setStatus('Enter an event code','error');return;}
   var btn=document.getElementById('fetch-stat-btn');
   btn.innerHTML='<span class="spinner"></span>Fetching...';btn.disabled=true;
+  lastEventCode=code;saveState();
   setStatus('Fetching from Statbotics...');
   fetch('https://api.statbotics.io/v3/team_events?event='+code+'&limit=100',{headers:{accept:'application/json'}})
   .then(function(r){if(!r.ok)throw new Error('Statbotics returned '+r.status);return r.json();})
@@ -579,6 +701,7 @@ function fetchTBA(){
   if(!code){setStatus('Enter an event code','error');return;}
   var btn=document.getElementById('fetch-tba-btn');
   btn.innerHTML='<span class="spinner"></span>Fetching...';btn.disabled=true;
+  lastEventCode=code;saveState();
   setStatus('Fetching from TBA...');
   var h={'X-TBA-Auth-Key':TBA_KEY};
   var base='https://www.thebluealliance.com/api/v3';
@@ -742,7 +865,7 @@ function getSorted(){
 
 
 // ── Render ──
-function renderAll(){renderTable();renderRankings();renderSummary();renderRLTabs();renderMobile();}
+function renderAll(){renderTable();renderRankings();renderSummary();renderRLTabs();renderMobile();saveState();}
 
 function renderTable(){
   var sorted=getSorted();
@@ -831,7 +954,7 @@ function setScore(num,id,val){
   }
 }
 function setTextScore(num,id,val){if(!teams[num])return;if(!teams[num].textScores)teams[num].textScores={};teams[num].textScores[id]=val;}
-function setNote(num,tag,val){if(teams[num])teams[num].notes[tag]=val;}
+function setNote(num,tag,val){if(teams[num]){teams[num].notes[tag]=val;saveState();}}
 function toggleDNP(num,val){if(teams[num]){teams[num].dnp=val;renderAll();}}
 
 // ── Ranking Views ──
@@ -1012,7 +1135,7 @@ function applyMobile(isMobile){
       +'<button onclick="toggleTheme()" id="theme-btn-m">Light mode</button>'
       +'</div><div id="status-bar-m" style="font-size:12px;padding:4px 0;min-height:18px;color:var(--text2)"></div></div>'},
     {title:'Live Rankings',open:true,html:'<div style="padding:10px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><div class="rl-tabs" id="rl-tabs-m"></div><button onclick="openRLModal()">+ View</button></div><div class="rank-scroll" id="rank-list-m"><p style="font-size:12px;color:var(--text3)">No teams yet</p></div></div>'},
-    {title:'Team Table',open:false,html:'<div><div class="table-outer" style="border:none;border-radius:0"><table><thead id="thead-m"></thead><tbody id="tbody-m"></tbody></table></div></div>'},
+    {title:'Team Table',open:false,html:'<div><div class="table-outer" style="overflow-x:auto;overflow-y:auto;max-height:60vh;border:none;border-radius:0"><table><thead id="thead-m"></thead><tbody id="tbody-m"></tbody></table></div></div>'},
     {title:'Notes & Tags',open:false,html:'<div style="padding:10px"><div id="tag-list-m"></div><div class="flex-gap" style="margin-top:8px"><input type="text" id="new-tag-m" placeholder="New tag..." style="flex:1"><button onclick="addTagMobile()">+</button></div></div>'},
     {title:'Summary',open:false,html:'<div style="padding:10px"><div id="summary-m" style="font-size:12px;color:var(--text2);line-height:1.9"></div></div>'}
   ];
