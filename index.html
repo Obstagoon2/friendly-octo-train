@@ -154,6 +154,7 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
         <button onclick="openCriteriaModal()">Criteria</button>
         <button onclick="addTeamManual()">+ Team</button>
         <button onclick="toggleTheme()" id="theme-btn">Light mode</button>
+        <span id="save-indicator" style="font-size:11px;color:var(--success);opacity:0;transition:opacity .4s;white-space:nowrap">&#10003; Saved</span>
       </div>
       <div id="status-bar" class="status-bar"></div>
     </div>
@@ -386,27 +387,54 @@ function dbClear(store,cb){
   tx.oncomplete=function(){cb&&cb();};
 }
 
+var saveTimer=null;
+
 function saveState(){
   if(!db) return;
-  var state={
-    teams:{},criteria:criteria,noteTags:noteTags,
-    rlViews:rlViews,activeRLView:activeRLView,
-    sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
-    lastEventCode:lastEventCode
-  };
-  Object.values(teams).forEach(function(t){
-    state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
-      textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
-  });
-  dbPut('state','main',state);
-  // Save photos as blobs
-  dbClear('photos',function(){
-    Object.keys(teamPhotos).forEach(function(num){
-      teamPhotos[num].forEach(function(p){
-        if(p.blob) dbPut('photos',p.fname,p.blob);
-      });
+  // Debounce — wait 500ms of inactivity before writing
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer=setTimeout(function(){
+    var state={
+      teams:{},criteria:criteria,noteTags:noteTags,
+      rlViews:rlViews,activeRLView:activeRLView,
+      sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
+      lastEventCode:lastEventCode
+    };
+    Object.values(teams).forEach(function(t){
+      state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
+        textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
     });
-  });
+    // Write state first
+    var tx=db.transaction('state','readwrite');
+    tx.objectStore('state').put(state,'main');
+    tx.oncomplete=function(){
+      // Then write photos
+      var ptx=db.transaction('photos','readwrite');
+      var store=ptx.objectStore('photos');
+      store.clear();
+      ptx.oncomplete=function(){
+        var ptx2=db.transaction('photos','readwrite');
+        var pstore=ptx2.objectStore('photos');
+        Object.keys(teamPhotos).forEach(function(num){
+          teamPhotos[num].forEach(function(p){
+            if(p.blob) pstore.put(p.blob,p.fname);
+          });
+        });
+        ptx2.oncomplete=function(){
+          showSaveIndicator();
+        };
+      };
+    };
+    tx.onerror=function(e){console.warn('State save error:',e);};
+  },500);
+}
+
+function showSaveIndicator(){
+  var el=document.getElementById('save-indicator');
+  if(!el) return;
+  el.textContent='&#10003; Saved';
+  el.style.opacity='1';
+  setTimeout(function(){el.style.opacity='0';},2000);
 }
 
 function loadState(cb){
@@ -595,6 +623,7 @@ function loadPhotoZip(evt){
   }).then(function(){
     Object.keys(teamPhotos).forEach(function(num){teamPhotos[num].sort(function(a,b){return a.photoNum-b.photoNum;});});
     setStatus('Loaded photos for '+Object.keys(teamPhotos).length+' teams','success');
+    saveState();
     renderTable();
   }).catch(function(e){setStatus('Photo load failed: '+e.message,'error');});
 }
@@ -771,6 +800,7 @@ function confirmStatModal(){
   });
   renderAll();
   setStatus('Loaded '+loaded+' teams from Statbotics','success');
+  saveState();
   pendingStatData=null;
 }
 
@@ -831,6 +861,7 @@ function confirmTBAModal(){
   });
   renderAll();
   setStatus('Loaded '+d.tbaTeams.length+' teams from TBA','success');
+  saveState();
   pendingTBAData=null;
 }
 
@@ -894,6 +925,7 @@ function confirmColModal(){
   });
   renderAll();
   setStatus(type+' CSV: '+Object.keys(grouped).length+' teams, '+checked.length+' columns','success');
+  saveState();
   pendingCSV=null;
 }
 
