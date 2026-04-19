@@ -329,80 +329,163 @@ var detailSortedNums=[];
 
 var autoRefreshInterval=null;
 var lastEventCode='';
+var db=null;
 
-// ── LocalStorage persistence ──
+// ── IndexedDB ──
+function initDB(cb){
+  var req=indexedDB.open('frc_picklist',1);
+  req.onupgradeneeded=function(e){
+    var d=e.target.result;
+    if(!d.objectStoreNames.contains('state')) d.createObjectStore('state');
+    if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos');
+  };
+  req.onsuccess=function(e){db=e.target.result;cb&&cb();};
+  req.onerror=function(){console.warn('IndexedDB failed');cb&&cb();};
+}
+
+function dbPut(store,key,val,cb){
+  if(!db) return cb&&cb();
+  var tx=db.transaction(store,'readwrite');
+  tx.objectStore(store).put(val,key);
+  tx.oncomplete=function(){cb&&cb();};
+  tx.onerror=function(){cb&&cb();};
+}
+
+function dbGet(store,key,cb){
+  if(!db) return cb(null);
+  var tx=db.transaction(store,'readonly');
+  var req=tx.objectStore(store).get(key);
+  req.onsuccess=function(){cb(req.result||null);};
+  req.onerror=function(){cb(null);};
+}
+
+function dbGetAll(store,cb){
+  if(!db) return cb({});
+  var tx=db.transaction(store,'readonly');
+  var os=tx.objectStore(store);
+  var keys=[],vals=[];
+  os.openKeyCursor().onsuccess=function(e){
+    var cur=e.target.result;
+    if(cur){keys.push(cur.key);cur.continue();}
+  };
+  os.openCursor().onsuccess=function(e){
+    var cur=e.target.result;
+    if(cur){vals.push({k:cur.key,v:cur.value});cur.continue();}
+    else{
+      var out={};
+      vals.forEach(function(x){out[x.k]=x.v;});
+      cb(out);
+    }
+  };
+}
+
+function dbClear(store,cb){
+  if(!db) return cb&&cb();
+  var tx=db.transaction(store,'readwrite');
+  tx.objectStore(store).clear();
+  tx.oncomplete=function(){cb&&cb();};
+}
+
 function saveState(){
-  try{
-    var state={
-      teams:{},criteria:criteria,noteTags:noteTags,
-      rlViews:rlViews,activeRLView:activeRLView,
-      sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
-      lastEventCode:lastEventCode
-    };
-    Object.values(teams).forEach(function(t){
-      state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
-        textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
+  if(!db) return;
+  var state={
+    teams:{},criteria:criteria,noteTags:noteTags,
+    rlViews:rlViews,activeRLView:activeRLView,
+    sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
+    lastEventCode:lastEventCode
+  };
+  Object.values(teams).forEach(function(t){
+    state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
+      textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
+  });
+  dbPut('state','main',state);
+  // Save photos as blobs
+  dbClear('photos',function(){
+    Object.keys(teamPhotos).forEach(function(num){
+      teamPhotos[num].forEach(function(p){
+        if(p.blob) dbPut('photos',p.fname,p.blob);
+      });
     });
-    localStorage.setItem('frc_picklist',JSON.stringify(state));
-  }catch(e){console.warn('Save failed:',e);}
+  });
 }
 
-function loadState(){
-  try{
-    var raw=localStorage.getItem('frc_picklist');
-    if(!raw)return false;
-    var state=JSON.parse(raw);
-    criteria=state.criteria||[];
-    noteTags=state.noteTags||['Strategy','Autos','Concerns'];
-    rlViews=state.rlViews||[{id:'rl_default',name:'Overall',criteriaIds:[]}];
-    activeRLView=state.activeRLView||'rl_default';
-    sortCol=state.sortCol||'__total__';
-    sortAsc=state.sortAsc||false;
-    lastEventCode=state.lastEventCode||'';
-    if(typeof state.darkMode==='boolean'&&state.darkMode!==darkMode)toggleTheme();
-    teams={};
-    Object.values(state.teams||{}).forEach(function(t){
-      teams[t.num]={num:t.num,name:t.name,notes:t.notes||{},scores:t.scores||{},
-        textScores:t.textScores||{},dnp:t.dnp||false,statbotics:t.statbotics||{},tba:t.tba||{}};
-    });
-    if(lastEventCode) document.getElementById('event-code').value=lastEventCode;
-    return true;
-  }catch(e){console.warn('Load failed:',e);return false;}
+function loadState(cb){
+  dbGet('state','main',function(state){
+    if(!state){cb&&cb(false);return;}
+    try{
+      criteria=state.criteria||[];
+      noteTags=state.noteTags||['Strategy','Autos','Concerns'];
+      rlViews=state.rlViews||[{id:'rl_default',name:'Overall',criteriaIds:[]}];
+      activeRLView=state.activeRLView||'rl_default';
+      sortCol=state.sortCol||'__total__';
+      sortAsc=state.sortAsc||false;
+      lastEventCode=state.lastEventCode||'';
+      if(typeof state.darkMode==='boolean'&&state.darkMode!==darkMode) toggleTheme();
+      teams={};
+      Object.values(state.teams||{}).forEach(function(t){
+        teams[t.num]={num:t.num,name:t.name,notes:t.notes||{},scores:t.scores||{},
+          textScores:t.textScores||{},dnp:t.dnp||false,statbotics:t.statbotics||{},tba:t.tba||{}};
+      });
+      if(lastEventCode){
+        document.getElementById('event-code').value=lastEventCode;
+        var em=document.getElementById('event-code-m');
+        if(em) em.value=lastEventCode;
+      }
+      // Restore photos from IndexedDB
+      teamPhotos={};
+      dbGetAll('photos',function(photoMap){
+        var promises=Object.keys(photoMap).map(function(fname){
+          return new Promise(function(resolve){
+            var blob=photoMap[fname];
+            var m=fname.match(/^frc(\d+)_?(\d*)\.(?:jpg|jpeg|png|gif|webp)$/i);
+            if(!m){resolve();return;}
+            var num=parseInt(m[1]),photoNum=parseInt(m[2])||1;
+            var url=URL.createObjectURL(blob);
+            if(!teamPhotos[num]) teamPhotos[num]=[];
+            teamPhotos[num].push({url:url,photoNum:photoNum,blob:blob,fname:fname});
+            resolve();
+          });
+        });
+        Promise.all(promises).then(function(){
+          Object.keys(teamPhotos).forEach(function(num){
+            teamPhotos[num].sort(function(a,b){return a.photoNum-b.photoNum;});
+          });
+          cb&&cb(true);
+        });
+      });
+    }catch(e){console.warn('Load failed:',e);cb&&cb(false);}
+  });
 }
-
-// Auto-save after every meaningful action
-function saveAndRender(){saveState();renderAll();}
 
 // ── Auto-refresh ──
 function startAutoRefresh(){
   stopAutoRefresh();
   autoRefreshInterval=setInterval(function(){
     if(lastEventCode) refreshData();
-  },5*60*1000); // every 5 minutes
+  },5*60*1000);
 }
 function stopAutoRefresh(){
   if(autoRefreshInterval){clearInterval(autoRefreshInterval);autoRefreshInterval=null;}
 }
 function refreshData(){
   var code=lastEventCode||document.getElementById('event-code').value.trim().toLowerCase();
-  if(!code)return;
-  setStatus('Auto-refreshing data...');
-  // Refresh Statbotics
+  if(!code) return;
+  setStatus('Refreshing data...');
   fetch('https://api.statbotics.io/v3/team_events?event='+code+'&limit=100',{headers:{accept:'application/json'}})
   .then(function(r){return r.ok?r.json():null;})
   .then(function(list){
-    if(!list||!list.length)return;
+    if(!list||!list.length) return;
     return Promise.all(list.map(function(s){
       return fetch('https://api.statbotics.io/v3/team_event/'+s.team+'/'+code,{headers:{accept:'application/json'}})
         .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
     }));
   })
   .then(function(details){
-    if(!details)return;
+    if(!details) return;
     details.forEach(function(s){
-      if(!s)return;
+      if(!s) return;
       var num=s.team;
-      if(!teams[num])return; // only update existing teams, don't add new ones on refresh
+      if(!teams[num]) return;
       var b=(s.epa&&s.epa.breakdown)||{};
       teams[num].statbotics={
         epa:s.epa&&s.epa.total_points&&s.epa.total_points.mean!=null?+s.epa.total_points.mean.toFixed(1):'',
@@ -417,23 +500,20 @@ function refreshData(){
       };
     });
   }).catch(function(){});
-  // Refresh TBA
   var h={'X-TBA-Auth-Key':TBA_KEY};
   var base='https://www.thebluealliance.com/api/v3';
   Promise.all([
     fetch(base+'/event/'+code+'/rankings',{headers:h}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}),
     fetch(base+'/event/'+code+'/oprs',{headers:h}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};})
   ]).then(function(res){
-    var tbaRank=res[0],tbaOpr=res[1];
     var rankMap={};
-    (tbaRank.rankings||[]).forEach(function(r){
+    (res[0].rankings||[]).forEach(function(r){
       rankMap[r.team_key]={rank:r.rank,wins:r.record?r.record.wins:'',losses:r.record?r.record.losses:'',ties:r.record?r.record.ties:'',rp:r.extra_stats?r.extra_stats[0]:''};
     });
-    var oprMap=tbaOpr.oprs||{},dprMap=tbaOpr.dprs||{},ccwmMap=tbaOpr.ccwms||{};
+    var oprMap=res[1].oprs||{},dprMap=res[1].dprs||{},ccwmMap=res[1].ccwms||{};
     Object.values(teams).forEach(function(t){
-      var key='frc'+t.num;
+      var key='frc'+t.num,r=rankMap[key]||{};
       if(!t.tba) t.tba={};
-      var r=rankMap[key]||{};
       if(r.rank!=null) t.tba.tba_rank=r.rank;
       if(oprMap[key]!=null) t.tba.tba_opr=+oprMap[key].toFixed(1);
       if(dprMap[key]!=null) t.tba.tba_dpr=+dprMap[key].toFixed(1);
@@ -443,7 +523,6 @@ function refreshData(){
       if(r.ties!=null) t.tba.tba_ties=r.ties;
       if(r.rp!=null) t.tba.tba_rp=r.rp;
     });
-    saveState();
     renderAll();
     setStatus('Data refreshed','success');
   }).catch(function(){setStatus('Refresh failed','error');});
