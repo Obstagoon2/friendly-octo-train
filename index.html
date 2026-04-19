@@ -136,6 +136,7 @@ tr.dnp-row td{opacity:.5;background:var(--bg2)}
     <div class="card">
       <h3>Summary</h3>
       <div id="summary" style="font-size:12px;color:var(--text2);line-height:1.9"></div>
+      <div id="save-status" style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--border);font-size:11px;color:var(--text3);line-height:1.7"></div>
     </div>
   </div>
   <div class="main">
@@ -387,18 +388,21 @@ function dbClear(store,cb){
   tx.oncomplete=function(){cb&&cb();};
 }
 
+var lastSavedAt=null;
 var saveTimer=null;
 
 function saveState(){
   if(!db) return;
   // Debounce — wait 500ms of inactivity before writing
   if(saveTimer) clearTimeout(saveTimer);
+  updateSaveStatus('saving');
   saveTimer=setTimeout(function(){
     var state={
       teams:{},criteria:criteria,noteTags:noteTags,
       rlViews:rlViews,activeRLView:activeRLView,
       sortCol:sortCol,sortAsc:sortAsc,darkMode:darkMode,
-      lastEventCode:lastEventCode
+      lastEventCode:lastEventCode,
+      savedAt:new Date().toISOString()
     };
     Object.values(teams).forEach(function(t){
       state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
@@ -430,11 +434,32 @@ function saveState(){
 }
 
 function showSaveIndicator(){
+  lastSavedAt=new Date();
   var el=document.getElementById('save-indicator');
+  if(el){el.textContent='✓ Saved';el.style.opacity='1';setTimeout(function(){el.style.opacity='0';},2000);}
+  updateSaveStatus('saved');
+}
+
+function updateSaveStatus(state,extra){
+  var el=document.getElementById('save-status');
   if(!el) return;
-  el.textContent='&#10003; Saved';
-  el.style.opacity='1';
-  setTimeout(function(){el.style.opacity='0';},2000);
+  var lines=[];
+  if(state==='saving'){
+    lines.push('<span style="color:var(--text2)">&#9679; Saving...</span>');
+  } else if(state==='saved'&&lastSavedAt){
+    lines.push('<span style="color:var(--success)">&#10003; Saved</span>');
+    lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
+  } else if(state==='loaded'){
+    lines.push('<span style="color:var(--info-text)">&#8635; Session loaded</span>');
+    if(extra) lines.push('From: '+extra);
+    if(lastSavedAt) lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
+  } else if(state==='empty'){
+    lines.push('<span style="color:var(--text3)">No saved session</span>');
+  }
+  if(lastEventCode&&state!=='loaded'){
+    lines.push('Event: '+lastEventCode);
+  }
+  el.innerHTML=lines.join('<br>');
 }
 
 function loadState(cb){
@@ -458,6 +483,9 @@ function loadState(cb){
         document.getElementById('event-code').value=lastEventCode;
         var em=document.getElementById('event-code-m');
         if(em) em.value=lastEventCode;
+      }
+      if(state.savedAt){
+        lastSavedAt=new Date(state.savedAt);
       }
       // Restore photos from IndexedDB
       teamPhotos={};
