@@ -347,38 +347,41 @@ function initDB(cb){
 
 function dbPut(store,key,val,cb){
   if(!db) return cb&&cb();
-  var tx=db.transaction(store,'readwrite');
-  tx.objectStore(store).put(val,key);
-  tx.oncomplete=function(){cb&&cb();};
-  tx.onerror=function(){cb&&cb();};
+  try{
+    var tx=db.transaction(store,'readwrite');
+    var req=tx.objectStore(store).put(val,key);
+    tx.oncomplete=function(){cb&&cb();};
+    tx.onerror=function(e){console.warn('dbPut error',e);cb&&cb();};
+  }catch(e){console.warn('dbPut threw',e);cb&&cb();}
 }
 
 function dbGet(store,key,cb){
   if(!db) return cb(null);
-  var tx=db.transaction(store,'readonly');
-  var req=tx.objectStore(store).get(key);
-  req.onsuccess=function(){cb(req.result||null);};
-  req.onerror=function(){cb(null);};
+  try{
+    var tx=db.transaction(store,'readonly');
+    var req=tx.objectStore(store).get(key);
+    req.onsuccess=function(){cb(req.result!=null?req.result:null);};
+    req.onerror=function(){cb(null);};
+  }catch(e){console.warn('dbGet threw',e);cb(null);}
 }
 
 function dbGetAll(store,cb){
   if(!db) return cb({});
-  var tx=db.transaction(store,'readonly');
-  var os=tx.objectStore(store);
-  var keys=[],vals=[];
-  os.openKeyCursor().onsuccess=function(e){
-    var cur=e.target.result;
-    if(cur){keys.push(cur.key);cur.continue();}
-  };
-  os.openCursor().onsuccess=function(e){
-    var cur=e.target.result;
-    if(cur){vals.push({k:cur.key,v:cur.value});cur.continue();}
-    else{
+  try{
+    var tx=db.transaction(store,'readonly');
+    var req=tx.objectStore(store).getAll();
+    var kreq=tx.objectStore(store).getAllKeys();
+    var vals=null,keys=null;
+    req.onsuccess=function(){vals=req.result;tryDone();};
+    kreq.onsuccess=function(){keys=kreq.result;tryDone();};
+    req.onerror=function(){cb({});};
+    function tryDone(){
+      if(vals===null||keys===null) return;
       var out={};
-      vals.forEach(function(x){out[x.k]=x.v;});
+      keys.forEach(function(k,i){out[k]=vals[i];});
       cb(out);
     }
-  };
+  }catch(e){console.warn('dbGetAll threw',e);cb({});}
 }
 
 function dbClear(store,cb){
@@ -393,7 +396,6 @@ var saveTimer=null;
 
 function saveState(){
   if(!db) return;
-  // Debounce — wait 500ms of inactivity before writing
   if(saveTimer) clearTimeout(saveTimer);
   updateSaveStatus('saving');
   saveTimer=setTimeout(function(){
@@ -408,28 +410,29 @@ function saveState(){
       state.teams[t.num]={num:t.num,name:t.name,notes:t.notes,scores:t.scores,
         textScores:t.textScores||{},dnp:t.dnp,statbotics:t.statbotics||{},tba:t.tba||{}};
     });
-    // Write state first
-    var tx=db.transaction('state','readwrite');
-    tx.objectStore('state').put(state,'main');
-    tx.oncomplete=function(){
-      // Then write photos
-      var ptx=db.transaction('photos','readwrite');
-      var store=ptx.objectStore('photos');
-      store.clear();
-      ptx.oncomplete=function(){
-        var ptx2=db.transaction('photos','readwrite');
-        var pstore=ptx2.objectStore('photos');
-        Object.keys(teamPhotos).forEach(function(num){
-          teamPhotos[num].forEach(function(p){
-            if(p.blob) pstore.put(p.blob,p.fname);
-          });
-        });
-        ptx2.oncomplete=function(){
-          showSaveIndicator();
+    // Step 1: save state JSON
+    dbPut('state','main',state,function(){
+      // Step 2: clear photos then rewrite
+      try{
+        var ptx=db.transaction('photos','readwrite');
+        ptx.objectStore('photos').clear();
+        ptx.oncomplete=function(){
+          // Step 3: write all photo blobs
+          try{
+            var ptx2=db.transaction('photos','readwrite');
+            var ps=ptx2.objectStore('photos');
+            Object.keys(teamPhotos).forEach(function(num){
+              teamPhotos[num].forEach(function(p){
+                if(p.blob) ps.put(p.blob,p.fname);
+              });
+            });
+            ptx2.oncomplete=function(){showSaveIndicator();};
+            ptx2.onerror=function(e){console.warn('photo write error',e);showSaveIndicator();};
+          }catch(e){console.warn('photo write threw',e);showSaveIndicator();}
         };
-      };
-    };
-    tx.onerror=function(e){console.warn('State save error:',e);};
+        ptx.onerror=function(e){console.warn('photo clear error',e);showSaveIndicator();};
+      }catch(e){console.warn('photo clear threw',e);showSaveIndicator();}
+    });
   },500);
 }
 
@@ -1061,15 +1064,28 @@ function renderRankings(){
 
 function renderSummary(){
   var arr=Object.values(teams),dnp=arr.filter(function(t){return t.dnp;}).length;
-  document.getElementById('summary').innerHTML='Teams: '+arr.length+'<br>Ranked: '+(arr.length-dnp)+'<br>DNP: '+dnp+'<br>Criteria: '+criteria.length+'<br>Views: '+rlViews.length;
-  // Refresh save status display without overwriting it
-  var el=document.getElementById('save-status');
-  if(!el) return;
+  var html='Teams: '+arr.length+'<br>Ranked: '+(arr.length-dnp)+'<br>DNP: '+dnp+'<br>Criteria: '+criteria.length+'<br>Views: '+rlViews.length;
+  document.getElementById('summary').innerHTML=html;
+  var sm=document.getElementById('summary-m');
+  if(sm) sm.innerHTML=html;
+  // Update save status in both desktop and mobile
+  var statusHtml=buildSaveStatusHtml();
+  var ss=document.getElementById('save-status');
+  if(ss) ss.innerHTML=statusHtml;
+  var ssm=document.getElementById('save-status-m');
+  if(ssm) ssm.innerHTML=statusHtml;
+}
+
+function buildSaveStatusHtml(){
+  var lines=[];
   if(!lastSavedAt){
-    el.innerHTML='<span style="color:var(--text3)">No saved session</span>';
+    lines.push('<span style="color:var(--text3)">No saved session</span>');
   } else {
-    el.innerHTML='<span style="color:var(--success)">&#10003; Saved</span><br>Last saved: '+lastSavedAt.toLocaleTimeString()+(lastEventCode?'<br>Event: '+lastEventCode:'');
+    lines.push('<span style="color:var(--success)">&#10003; Saved</span>');
+    lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
   }
+  if(lastEventCode) lines.push('Event: '+lastEventCode);
+  return lines.join('<br>');
 }
 
 function setRLView(id){
@@ -1303,7 +1319,7 @@ function fetchTBAMobile(){var m=document.getElementById('event-code-m');if(m)doc
 function addTagMobile(){var inp=document.getElementById('new-tag-m');if(!inp)return;var val=inp.value.trim();if(!val||noteTags.indexOf(val)>=0)return;noteTags.push(val);inp.value='';renderTagList();renderTable();}
 function renderMobile(){
   if(!window.matchMedia('(max-width:700px)').matches)return;
-  var pairs=[['status-bar','status-bar-m'],['rl-tabs','rl-tabs-m'],['rank-list','rank-list-m'],['thead','thead-m'],['tbody','tbody-m'],['tag-list','tag-list-m'],['summary','summary-m']];
+  var pairs=[['status-bar','status-bar-m'],['rl-tabs','rl-tabs-m'],['rank-list','rank-list-m'],['thead','thead-m'],['tbody','tbody-m'],['tag-list','tag-list-m']];
   pairs.forEach(function(p){var s=document.getElementById(p[0]),d=document.getElementById(p[1]);if(s&&d){d.innerHTML=s.innerHTML;if(p[0]==='status-bar')d.style.color=s.style.color;}});
   syncMobileThemeBtn();
 }
