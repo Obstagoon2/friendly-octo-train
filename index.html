@@ -437,28 +437,27 @@ function showSaveIndicator(){
   lastSavedAt=new Date();
   var el=document.getElementById('save-indicator');
   if(el){el.textContent='✓ Saved';el.style.opacity='1';setTimeout(function(){el.style.opacity='0';},2000);}
-  updateSaveStatus('saved');
+  renderSummary();
 }
 
 function updateSaveStatus(state,extra){
+  lastSavedAt= state==='saved' ? new Date() : lastSavedAt;
   var el=document.getElementById('save-status');
   if(!el) return;
   var lines=[];
   if(state==='saving'){
     lines.push('<span style="color:var(--text2)">&#9679; Saving...</span>');
-  } else if(state==='saved'&&lastSavedAt){
+    if(lastSavedAt) lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
+  } else if(state==='saved'){
     lines.push('<span style="color:var(--success)">&#10003; Saved</span>');
     lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
   } else if(state==='loaded'){
     lines.push('<span style="color:var(--info-text)">&#8635; Session loaded</span>');
-    if(extra) lines.push('From: '+extra);
-    if(lastSavedAt) lines.push('Last saved: '+lastSavedAt.toLocaleTimeString());
-  } else if(state==='empty'){
+    if(extra) lines.push(extra);
+  } else {
     lines.push('<span style="color:var(--text3)">No saved session</span>');
   }
-  if(lastEventCode&&state!=='loaded'){
-    lines.push('Event: '+lastEventCode);
-  }
+  if(lastEventCode) lines.push('Event: '+lastEventCode);
   el.innerHTML=lines.join('<br>');
 }
 
@@ -1063,6 +1062,14 @@ function renderRankings(){
 function renderSummary(){
   var arr=Object.values(teams),dnp=arr.filter(function(t){return t.dnp;}).length;
   document.getElementById('summary').innerHTML='Teams: '+arr.length+'<br>Ranked: '+(arr.length-dnp)+'<br>DNP: '+dnp+'<br>Criteria: '+criteria.length+'<br>Views: '+rlViews.length;
+  // Refresh save status display without overwriting it
+  var el=document.getElementById('save-status');
+  if(!el) return;
+  if(!lastSavedAt){
+    el.innerHTML='<span style="color:var(--text3)">No saved session</span>';
+  } else {
+    el.innerHTML='<span style="color:var(--success)">&#10003; Saved</span><br>Last saved: '+lastSavedAt.toLocaleTimeString()+(lastEventCode?'<br>Event: '+lastEventCode:'');
+  }
 }
 
 function setRLView(id){
