@@ -340,9 +340,20 @@ function initDB(cb){
     var d=e.target.result;
     if(!d.objectStoreNames.contains('state')) d.createObjectStore('state');
     if(!d.objectStoreNames.contains('photos')) d.createObjectStore('photos');
+    console.log('IndexedDB: stores created');
   };
-  req.onsuccess=function(e){db=e.target.result;cb&&cb();};
-  req.onerror=function(){console.warn('IndexedDB failed');cb&&cb();};
+  req.onsuccess=function(e){
+    db=e.target.result;
+    console.log('IndexedDB: opened ok, stores:',Array.from(db.objectStoreNames));
+    cb&&cb();
+  };
+  req.onerror=function(e){
+    console.warn('IndexedDB failed to open:',e);
+    cb&&cb();
+  };
+  req.onblocked=function(){
+    console.warn('IndexedDB blocked — close other tabs');
+  };
 }
 
 function dbPut(store,key,val,cb){
@@ -412,6 +423,7 @@ function saveState(){
     });
     // Step 1: save state JSON
     dbPut('state','main',state,function(){
+      console.log('IndexedDB: state saved, teams:',Object.keys(state.teams).length);
       // Step 2: clear photos then rewrite
       try{
         var ptx=db.transaction('photos','readwrite');
@@ -465,7 +477,9 @@ function updateSaveStatus(state,extra){
 }
 
 function loadState(cb){
+  console.log('IndexedDB: attempting load, db=',db);
   dbGet('state','main',function(state){
+    console.log('IndexedDB: load result=',state?'found ('+Object.keys(state.teams||{}).length+' teams)':'null');
     if(!state){cb&&cb(false);return;}
     try{
       criteria=state.criteria||[];
